@@ -1,0 +1,9 @@
+2026/03/26-20:00:02.731 8938 Reusing MANIFEST C:\Users\Shubham(Code)\Videos\Github\CRM\1.1 AIO CRM(25-03-2026)\WA\.wwebjs_auth\session-019d2a4d-d1cb-7abd-888d-7a3a6a4e9505\Default\Local Storage\leveldb/MANIFEST-000001
+2026/03/26-20:00:02.735 8938 Recovering log #4
+2026/03/26-20:00:02.737 8938 Reusing old log C:\Users\Shubham(Code)\Videos\Github\CRM\1.1 AIO CRM(25-03-2026)\WA\.wwebjs_auth\session-019d2a4d-d1cb-7abd-888d-7a3a6a4e9505\Default\Local Storage\leveldb/000004.log 
+2026/03/27-11:06:27.381 6014 Level-0 table #8: started
+2026/03/27-11:06:27.386 6014 Level-0 table #8: 14209 bytes OK
+2026/03/27-11:06:27.389 6014 Delete type=0 #4
+2026/03/27-15:24:08.119 8938 Level-0 table #10: started
+2026/03/27-15:24:08.130 8938 Level-0 table #10: 14341 bytes OK
+2026/03/27-15:24:08.133 8938 Delete type=0 #7
