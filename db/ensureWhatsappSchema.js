@@ -60,6 +60,9 @@ export async function ensureWhatsappSchema() {
       )
     `);
 
+    // Add columns for existing tables
+    await sql.unsafe(`ALTER TABLE ${prefix}whatsapp_sessions ADD COLUMN IF NOT EXISTS created_by uuid`).catch(() => {});
+
     console.log("[ensureWhatsappSchema] OK");
   } catch (err) {
     console.error("[ensureWhatsappSchema]", err.message);

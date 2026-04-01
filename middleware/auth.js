@@ -10,7 +10,8 @@ import { users } from "../schema/users.js";
 export async function requireAuth(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
-    const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    // Support token via query param for media streaming (img/video/audio src can't set headers)
+    const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : (req.query.token || null);
     if (!token) {
       return res.status(401).json({ error: "Not authenticated" });
     }

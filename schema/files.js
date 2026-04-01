@@ -12,6 +12,8 @@ export const files = finalSchema.table("files", {
   uploadedBy: uuid("uploaded_by")
     .references(() => users.id, { onDelete: "set null" }),
   fileName: text("file_name").notNull(),
+  title: text("title"), // user-friendly display title
+  description: text("description"), // user-provided description
   fileKey: text("file_key").notNull(), // S3 key path
   fileUrl: text("file_url").notNull(), // public/signed URL
   fileType: text("file_type"), // mime type e.g. image/jpeg, application/pdf

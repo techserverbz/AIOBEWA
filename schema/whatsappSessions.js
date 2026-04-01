@@ -10,6 +10,7 @@ export const whatsappSessions = finalSchema.table(
     organizationId: uuid("organization_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
+    createdBy: uuid("created_by"), // user who owns this session
     type: text("type").notNull(), // "baileys" | "official"
     sessionName: text("session_name").notNull(),
     phoneNumber: text("phone_number"),

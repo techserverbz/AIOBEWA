@@ -2,7 +2,6 @@ import "dotenv/config";
 import express from "express";
 import { ensureWhatsappSchema } from "./db/ensureWhatsappSchema.js";
 import whatsappRoutes from "./routes/whatsappRoutes.js";
-import { handleWebhook } from "./controller/whatsappController.js";
 import { whatsappManager } from "./lib/whatsappManager.js";
 
 const app = express();
@@ -30,23 +29,19 @@ app.use((req, res, next) => {
 
 // Health check
 app.get("/", (_req, res) => {
-  res.json({ status: "ok", service: "whatsapp", sessions: whatsappManager.connections.size });
+  res.json({ status: "ok", service: "whatsapp-wwebjs", sessions: whatsappManager.clients.size });
 });
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "whatsapp", activeSessions: whatsappManager.connections.size });
+  res.json({ ok: true, service: "whatsapp-wwebjs", activeSessions: whatsappManager.clients.size });
 });
 
 // WhatsApp routes (auth + org required)
 app.use("/sessions", whatsappRoutes);
 
-// Webhook (public — no auth, Meta needs to reach it)
-app.get("/webhook", handleWebhook);
-app.post("/webhook", handleWebhook);
-
 // Error handler
-app.use((err, req, res, next) => {
-  console.error("[WA ERROR]", new Date().toISOString(), req.method, req.originalUrl, err.message);
+app.use((err, _req, res, _next) => {
+  console.error("[WA ERROR]", new Date().toISOString(), err.message);
   res.status(err.status || 500).json({ error: err.message });
 });
 
@@ -55,9 +50,9 @@ ensureWhatsappSchema()
   .then(() => {
     app.listen(PORT, () => {
       console.log(`WhatsApp service running on http://localhost:${PORT}`);
-      // Auto-reconnect Baileys sessions
-      whatsappManager.reconnectAll().catch((err) => {
-        console.error("WhatsApp reconnect failed:", err.message);
+      // Auto-reconnect previously connected wwebjs sessions (non-blocking)
+      whatsappManager.autoReconnect().catch((err) => {
+        console.error("[WA] Auto-reconnect failed:", err.message);
       });
     });
   })
