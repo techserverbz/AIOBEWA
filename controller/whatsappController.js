@@ -310,6 +310,22 @@ export async function getChatMessages(req, res) {
   }
 }
 
+/** POST /sessions/:id/backfill — manual re-scan of WA in-memory store → DB */
+export async function backfillMessages(req, res) {
+  try {
+    const session = await getOrgSession(req);
+    if (!session) return res.status(404).json({ error: "Session not found" });
+    if (!isOwner(session, req.user.id))
+      return res.status(403).json({ error: "Not your session" });
+
+    const result = await whatsappManager.triggerBackfill(session.id);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("[WA] backfillMessages:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
 /** GET /sessions/:id/media/:messageId — Owner only */
 export async function streamMedia(req, res) {
   try {

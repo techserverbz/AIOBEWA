@@ -63,6 +63,28 @@ export async function ensureWhatsappSchema() {
     // Add columns for existing tables
     await sql.unsafe(`ALTER TABLE ${prefix}whatsapp_sessions ADD COLUMN IF NOT EXISTS created_by uuid`).catch(() => {});
 
+    // Dedup + fast filter indexes for whatsapp_messages
+    await sql.unsafe(`
+      CREATE UNIQUE INDEX IF NOT EXISTS whatsapp_messages_session_message_uq
+      ON ${prefix}whatsapp_messages (session_id, message_id)
+    `).catch(() => {});
+    await sql.unsafe(`
+      CREATE INDEX IF NOT EXISTS whatsapp_messages_session_created_idx
+      ON ${prefix}whatsapp_messages (session_id, created_at DESC)
+    `).catch(() => {});
+    await sql.unsafe(`
+      CREATE INDEX IF NOT EXISTS whatsapp_messages_from_number_idx
+      ON ${prefix}whatsapp_messages (session_id, from_number)
+    `).catch(() => {});
+    await sql.unsafe(`
+      CREATE INDEX IF NOT EXISTS whatsapp_messages_to_number_idx
+      ON ${prefix}whatsapp_messages (session_id, to_number)
+    `).catch(() => {});
+    await sql.unsafe(`
+      CREATE INDEX IF NOT EXISTS whatsapp_messages_from_jid_idx
+      ON ${prefix}whatsapp_messages (session_id, from_jid)
+    `).catch(() => {});
+
     console.log("[ensureWhatsappSchema] OK");
   } catch (err) {
     console.error("[ensureWhatsappSchema]", err.message);

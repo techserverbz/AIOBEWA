@@ -20,6 +20,7 @@ app.use((req, res, next) => {
   }
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept");
+  res.setHeader("Access-Control-Max-Age", "86400");
   if (req.method === "OPTIONS") {
     res.status(204).end();
     return;
@@ -45,7 +46,7 @@ app.use((err, _req, res, _next) => {
   res.status(err.status || 500).json({ error: err.message });
 });
 
-const PORT = 8002;
+const PORT = Number(process.env.PORT) || 8003;
 ensureWhatsappSchema()
   .then(() => {
     app.listen(PORT, () => {

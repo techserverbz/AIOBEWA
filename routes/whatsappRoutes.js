@@ -1,12 +1,11 @@
 import express from "express";
-import { requireAuth } from "../middleware/auth.js";
-import { requireOrg } from "../middleware/requireOrg.js";
+import { devAuth } from "../middleware/devAuth.js";
 import * as wa from "../controller/whatsappController.js";
 
 const router = express.Router();
 
-router.use(requireAuth);
-router.use(requireOrg);
+// Shared-access: no JWT, a single bootstrapped org+user serves every client.
+router.use(devAuth);
 
 // Session CRUD
 router.get("/", wa.listSessions);
@@ -28,10 +27,10 @@ router.get("/:id/messages", wa.listMessages);
 router.get("/:id/chats", wa.getChats);
 router.get("/:id/chats/:contactId", wa.getChatMessages);
 
-// On-demand media (preview — no S3)
-router.get("/:id/media/:messageId", wa.streamMedia);
+// Manual backfill trigger (idempotent, safe to call multiple times)
+router.post("/:id/backfill", wa.backfillMessages);
 
-// Save media to S3 (explicit user action, with notes)
-router.post("/:id/media/:messageId/save", wa.saveMedia);
+// On-demand media stream (served as attachment for download)
+router.get("/:id/media/:messageId", wa.streamMedia);
 
 export default router;
