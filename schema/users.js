@@ -9,6 +9,7 @@ export const users = finalSchema.table("users", {
   email: text("email").notNull().unique(),
   password: text("password").notNull(),
   passwordHash: text("password_hash").notNull(),
+  role: text("role").notNull().default("user"), // 'admin' | 'user'
   isDisabled: boolean("is_disabled").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

@@ -1,4 +1,6 @@
-import { eq, and, desc, isNull } from "drizzle-orm";
+import { eq, and, desc, isNull, inArray } from "drizzle-orm";
+import pkg from "whatsapp-web.js";
+const { MessageMedia } = pkg;
 import { db } from "../db/index.js";
 import { whatsappSessions } from "../schema/whatsappSessions.js";
 import { whatsappMessages } from "../schema/whatsappMessages.js";
@@ -7,13 +9,25 @@ import { whatsappManager } from "../lib/whatsappManager.js";
 
 // ─── Helpers ────────────────────────────────────────────────────
 
-/** Fetch session and verify it belongs to the user's org */
+/** Admin sees everything; otherwise the owner or a user the admin granted access. */
+function canView(req, session) {
+  return req.isAdmin || session.createdBy === req.user.id || (req.accessibleSessionIds?.has(session.id) ?? false);
+}
+
+/** Only admins and the session owner may manage (start/stop/delete/QR/save). */
+function canManage(req, session) {
+  return req.isAdmin || session.createdBy === req.user.id;
+}
+
+/** Fetch session, verify it belongs to the org AND the user may view it. */
 async function getOrgSession(req) {
   const [session] = await db.select()
     .from(whatsappSessions)
     .where(and(eq(whatsappSessions.id, req.params.id), eq(whatsappSessions.organizationId, req.organizationId)))
     .limit(1);
-  return session || null;
+  if (!session) return null;
+  if (!canView(req, session)) return null;
+  return session;
 }
 
 /** Check if user is the owner of the session */
@@ -27,12 +41,19 @@ function isOwner(session, userId) {
 export async function listSessions(req, res) {
   try {
     // Auto-claim: assign unclaimed sessions (created_by IS NULL) to the requesting admin
-    if (req.orgRole === "admin") {
+    if (req.isAdmin) {
       await db.update(whatsappSessions).set({ createdBy: req.user.id })
         .where(and(
           eq(whatsappSessions.organizationId, req.organizationId),
           isNull(whatsappSessions.createdBy),
         )).catch(() => {});
+    }
+
+    // Non-admins only see the business accounts the admin granted them.
+    if (!req.isAdmin) {
+      const ids = [...(req.accessibleSessionIds || [])];
+      if (ids.length === 0) return res.json({ sessions: [] });
+      req._sessionFilter = inArray(whatsappSessions.id, ids);
     }
 
     const rows = await db.select({
@@ -49,7 +70,9 @@ export async function listSessions(req, res) {
       createdAt: whatsappSessions.createdAt,
     })
       .from(whatsappSessions)
-      .where(eq(whatsappSessions.organizationId, req.organizationId))
+      .where(req._sessionFilter
+        ? and(eq(whatsappSessions.organizationId, req.organizationId), req._sessionFilter)
+        : eq(whatsappSessions.organizationId, req.organizationId))
       .orderBy(desc(whatsappSessions.createdAt));
 
     const enriched = rows.map((r) => ({
@@ -65,20 +88,16 @@ export async function listSessions(req, res) {
   }
 }
 
-/** POST /sessions — Any member can create (max 1 per member) */
+/** POST /sessions — Admin only. The admin links business accounts and controls access. */
 export async function createSession(req, res) {
   try {
+    if (!req.isAdmin) {
+      return res.status(403).json({ error: "Only an admin can link WhatsApp accounts" });
+    }
     const orgId = req.organizationId;
     const userId = req.user.id;
 
-    // Check if user already has a session
-    const [existing] = await db.select({ id: whatsappSessions.id })
-      .from(whatsappSessions)
-      .where(and(eq(whatsappSessions.organizationId, orgId), eq(whatsappSessions.createdBy, userId)))
-      .limit(1);
-    if (existing)
-      return res.status(409).json({ error: "You already have a WhatsApp session. Each member can only have one." });
-
+    // Admin may link as many business accounts as needed (no per-user cap).
     const sessionName = String(req.body.session_name ?? "").trim();
     if (!sessionName)
       return res.status(400).json({ error: "Session name is required" });
@@ -113,7 +132,7 @@ export async function deleteSession(req, res) {
     const session = await getOrgSession(req);
     if (!session) return res.status(404).json({ error: "Session not found" });
 
-    if (!isOwner(session, req.user.id) && req.orgRole !== "admin")
+    if (!canManage(req, session))
       return res.status(403).json({ error: "You can only delete your own session" });
 
     await whatsappManager.stopSession(session.id).catch(() => {});
@@ -132,8 +151,8 @@ export async function startSession(req, res) {
   try {
     const session = await getOrgSession(req);
     if (!session) return res.status(404).json({ error: "Session not found" });
-    if (!isOwner(session, req.user.id))
-      return res.status(403).json({ error: "Only the session owner can start it" });
+    if (!canManage(req, session))
+      return res.status(403).json({ error: "Admin or owner only" });
 
     await whatsappManager.startSession(session.id);
     res.json({ ok: true, message: "Session starting — poll /qr for QR code" });
@@ -148,8 +167,8 @@ export async function stopSession(req, res) {
   try {
     const session = await getOrgSession(req);
     if (!session) return res.status(404).json({ error: "Session not found" });
-    if (!isOwner(session, req.user.id))
-      return res.status(403).json({ error: "Only the session owner can stop it" });
+    if (!canManage(req, session))
+      return res.status(403).json({ error: "Admin or owner only" });
 
     await whatsappManager.stopSession(req.params.id);
     res.json({ ok: true });
@@ -164,8 +183,8 @@ export async function getQR(req, res) {
   try {
     const session = await getOrgSession(req);
     if (!session) return res.status(404).json({ error: "Session not found" });
-    if (!isOwner(session, req.user.id))
-      return res.status(403).json({ error: "Not your session" });
+    if (!canManage(req, session))
+      return res.status(403).json({ error: "Admin or owner only" });
 
     const qr = whatsappManager.getQR(req.params.id);
     res.json({ qr, status: session.connectionStatus || "disconnected" });
@@ -205,8 +224,8 @@ export async function sendMessage(req, res) {
 
     const session = await getOrgSession(req);
     if (!session) return res.status(404).json({ error: "Session not found" });
-    if (!isOwner(session, req.user.id))
-      return res.status(403).json({ error: "Not your session" });
+    if (!canView(req, session))
+      return res.status(403).json({ error: "No access to this account" });
 
     const result = await whatsappManager.sendText(session.id, to, message);
     res.json({ ok: true, result: { id: result?.id?.id } });
@@ -216,24 +235,147 @@ export async function sendMessage(req, res) {
   }
 }
 
-/** POST /sessions/:id/send-media — Owner only */
+/** POST /sessions/:id/send-media — Owner only.
+ *  Accepts either multipart (file field + to/caption fields)
+ *  OR JSON body { to, file_url, file_name, mime_type, caption }. */
 export async function sendMedia(req, res) {
   try {
-    const { to, file_url, file_name, mime_type, caption } = req.body;
-    if (!to) return res.status(400).json({ error: "Recipient number is required" });
-    if (!file_url) return res.status(400).json({ error: "File URL is required" });
-
     const session = await getOrgSession(req);
     if (!session) return res.status(404).json({ error: "Session not found" });
-    if (!isOwner(session, req.user.id))
-      return res.status(403).json({ error: "Not your session" });
+    if (!canView(req, session))
+      return res.status(403).json({ error: "No access to this account" });
 
+    const to = String(req.body.to ?? "").trim();
+    const caption = req.body.caption || undefined;
+    if (!to) return res.status(400).json({ error: "Recipient number is required" });
+
+    if (req.file) {
+      const buffer = req.file.buffer;
+      const fileName = req.file.originalname || `upload-${Date.now()}`;
+      const mimeType = req.file.mimetype || "application/octet-stream";
+      const sendType = req.body.send_type || null; // 'ptt' for voice note, optional
+
+      const result = await whatsappManager.sendMediaBuffer(
+        session.id, to, buffer, fileName, mimeType, caption, { sendType }
+      );
+      return res.json({ ok: true, result: { id: result?.id?.id } });
+    }
+
+    const { file_url, file_name, mime_type } = req.body;
+    if (!file_url) return res.status(400).json({ error: "File or file_url is required" });
     const result = await whatsappManager.sendMedia(
-      session.id, to.trim(), file_url, file_name || "file", mime_type, caption
+      session.id, to, file_url, file_name || "file", mime_type, caption
     );
     res.json({ ok: true, result: { id: result?.id?.id } });
   } catch (err) {
     console.error("[WA] sendMedia:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+export async function debugStore(req, res) {
+  try {
+    const session = await getOrgSession(req);
+    if (!session) return res.status(404).json({ error: "Session not found" });
+    const client = whatsappManager.clients.get(session.id);
+    if (!client) return res.status(400).json({ error: "Client not in memory" });
+    const info = await client.pupPage.evaluate(() => {
+      const out = {};
+      out.hasStore = typeof window.Store;
+      out.hasWWebJS = typeof window.WWebJS;
+      out.storeKeys = window.Store ? Object.keys(window.Store).slice(0, 60) : [];
+      out.storeKeyCount = window.Store ? Object.keys(window.Store).length : 0;
+      out.cmKeys = window.Store?.ConversationMsgs ? Object.keys(window.Store.ConversationMsgs).slice(0, 40) : null;
+      out.cmdKeys = window.Store?.Cmd ? Object.keys(window.Store.Cmd).filter((k) => /chat|msg|open|load/i.test(k)).slice(0, 60) : null;
+      out.chatGet = typeof window.Store?.Chat?.get;
+      out.widFactory = typeof window.Store?.WidFactory?.createWid;
+      return out;
+    });
+    res.json(info);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+export async function debugChatMessages(req, res) {
+  try {
+    const session = await getOrgSession(req);
+    if (!session) return res.status(404).json({ error: "Session not found" });
+    const client = whatsappManager.clients.get(session.id);
+    if (!client) return res.status(400).json({ error: "Client not in memory" });
+    const out = await client.pupPage.evaluate(async (cid, phone) => {
+      const log = [];
+      try {
+        const wid = window.Store.WidFactory.createWid(cid);
+        const chat = window.Store.Chat.get(wid)
+          || (await window.Store.FindOrCreateChat?.findOrCreateLatestChat(wid))?.chat;
+        const ser = chat?.id?._serialized || cid;
+        const lidNum = cid.split("@")[0];
+        log.push("chat ser=" + ser + " phone=" + phone);
+
+        const openDb = (name) => new Promise((res) => {
+          const r = indexedDB.open(name);
+          r.onsuccess = () => res(r.result);
+          r.onerror = () => res(null);
+        });
+        void lidNum; void phone;
+        const idb = await openDb("model-storage");
+        const tx = idb.transaction("message", "readonly");
+        const os = tx.objectStore("message");
+        // Find an image/video message for this chat and dump its thumbnail-ish fields.
+        let raw = null;
+        await new Promise((res) => {
+          const range = IDBKeyRange.bound(`false_${ser}_`, `false_${ser}_￿`);
+          const cur = os.openCursor(range);
+          cur.onsuccess = (e) => {
+            const c = e.target.result;
+            if (!c) return res();
+            const v = c.value;
+            if ((v?.type === "image" || v?.type === "video") && !raw) { raw = v; return res(); }
+            c.continue();
+          };
+          cur.onerror = () => res();
+        });
+        idb.close();
+        if (raw) {
+          log.push("raw keys=" + Object.keys(raw).join(","));
+          const t = raw.body || raw.clientThumbnail || raw.thumbnail;
+          log.push("body type=" + typeof raw.body + " len=" + (raw.body ? String(raw.body).length : 0));
+          log.push("has clientThumbnail=" + (!!raw.clientThumbnail) + " has thumbnail=" + (!!raw.thumbnail));
+          log.push("body sample=" + (typeof t === "string" ? t.slice(0, 40) : JSON.stringify(t)?.slice(0, 80)));
+          // Also check the hydrated model.
+          const r = await window.Store.Msg.getMessagesById([raw.id]);
+          const m = r?.messages?.[0];
+          if (m) {
+            log.push("model keys=" + Object.keys(m).slice(0, 40).join(","));
+            log.push("model.body len=" + (m.body ? m.body.length : 0) + " mediaData=" + (m.mediaData ? Object.keys(m.mediaData).join("|") : "none"));
+          }
+        } else {
+          log.push("no image/video msg found for chat");
+        }
+      } catch (e) {
+        log.push("outer err: " + e.message);
+      }
+      return { log };
+    }, req.params.contactId, req.query.phone || "");
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+/** POST /sessions/:id/backfill — refresh chats from live wwebjs into memory cache. */
+export async function backfill(req, res) {
+  try {
+    const session = await getOrgSession(req);
+    if (!session) return res.status(404).json({ error: "Session not found" });
+    if (!canView(req, session))
+      return res.status(403).json({ error: "No access to this account" });
+    whatsappManager.invalidateChatCache?.(session.id);
+    const chats = await whatsappManager.getChats(session.id, 200);
+    res.json({ ok: true, inserted: chats.length });
+  } catch (err) {
+    console.error("[WA] backfill:", err.message);
     res.status(500).json({ error: err.message });
   }
 }
@@ -245,8 +387,8 @@ export async function listMessages(req, res) {
   try {
     const session = await getOrgSession(req);
     if (!session) return res.status(404).json({ error: "Session not found" });
-    if (!isOwner(session, req.user.id))
-      return res.status(403).json({ error: "Not your session" });
+    if (!canView(req, session))
+      return res.status(403).json({ error: "No access to this account" });
 
     const rows = await db.select({
       id: whatsappMessages.id,
@@ -281,12 +423,20 @@ export async function getChats(req, res) {
   try {
     const session = await getOrgSession(req);
     if (!session) return res.status(404).json({ error: "Session not found" });
-    if (!isOwner(session, req.user.id))
-      return res.status(403).json({ error: "Not your session" });
+    if (!canView(req, session))
+      return res.status(403).json({ error: "No access to this account" });
 
     const limit = parseInt(req.query.limit) || 20;
-    const chats = await whatsappManager.getChats(session.id, limit);
-    res.json({ chats });
+    try {
+      const chats = await whatsappManager.getChats(session.id, limit);
+      return res.json({ chats });
+    } catch (err) {
+      // Client not ready yet (still syncing after QR scan) — return empty so UI shows "loading"
+      if (/Session not connected|getChats|Target closed|Execution context/i.test(err.message)) {
+        return res.json({ chats: [], syncing: true });
+      }
+      throw err;
+    }
   } catch (err) {
     console.error("[WA] getChats:", err.message);
     res.status(500).json({ error: err.message });
@@ -298,8 +448,8 @@ export async function getChatMessages(req, res) {
   try {
     const session = await getOrgSession(req);
     if (!session) return res.status(404).json({ error: "Session not found" });
-    if (!isOwner(session, req.user.id))
-      return res.status(403).json({ error: "Not your session" });
+    if (!canView(req, session))
+      return res.status(403).json({ error: "No access to this account" });
 
     const limit = parseInt(req.query.limit) || 50;
     const messages = await whatsappManager.getChatMessages(session.id, req.params.contactId, limit);
@@ -315,8 +465,8 @@ export async function streamMedia(req, res) {
   try {
     const session = await getOrgSession(req);
     if (!session) return res.status(404).json({ error: "Session not found" });
-    if (!isOwner(session, req.user.id))
-      return res.status(403).json({ error: "Not your session" });
+    if (!canView(req, session))
+      return res.status(403).json({ error: "No access to this account" });
 
     const media = await whatsappManager.getMedia(session.id, req.params.messageId);
 
@@ -336,8 +486,8 @@ export async function saveMedia(req, res) {
   try {
     const session = await getOrgSession(req);
     if (!session) return res.status(404).json({ error: "Session not found" });
-    if (!isOwner(session, req.user.id))
-      return res.status(403).json({ error: "Not your session" });
+    if (!canManage(req, session))
+      return res.status(403).json({ error: "Admin or owner only" });
 
     const title = req.body.title?.trim() || null;
     const description = req.body.description?.trim() || null;

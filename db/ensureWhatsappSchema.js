@@ -1,5 +1,6 @@
 import "dotenv/config";
 import postgres from "postgres";
+import bcrypt from "bcryptjs";
 
 const SCHEMA = process.env.DB_SCHEMA ?? "public";
 const prefix = SCHEMA === "public" ? "" : `"${SCHEMA}".`;
@@ -63,7 +64,29 @@ export async function ensureWhatsappSchema() {
     // Add columns for existing tables
     await sql.unsafe(`ALTER TABLE ${prefix}whatsapp_sessions ADD COLUMN IF NOT EXISTS created_by uuid`).catch(() => {});
 
-    console.log("[ensureWhatsappSchema] OK");
+    // ── Auth / admin-panel additions ──
+    await sql.unsafe(`ALTER TABLE ${prefix}users ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'user'`).catch(() => {});
+
+    await sql.unsafe(`
+      CREATE TABLE IF NOT EXISTS ${prefix}session_access (
+        id uuid PRIMARY KEY DEFAULT uuidv7(),
+        user_id uuid NOT NULL REFERENCES ${prefix}users(id) ON DELETE CASCADE,
+        session_id uuid NOT NULL REFERENCES ${prefix}whatsapp_sessions(id) ON DELETE CASCADE,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE(user_id, session_id)
+      )
+    `);
+
+    // Seed the admin account (admin / Admin@123). Never overwrites an existing password.
+    const adminHash = await bcrypt.hash("Admin@123", 10);
+    await sql.unsafe(`
+      INSERT INTO ${prefix}users (username, full_name, email, password, password_hash, role)
+      VALUES ('admin', 'Administrator', 'admin@local', $1, $1, 'admin')
+      ON CONFLICT (username) DO NOTHING
+    `, [adminHash]);
+    await sql.unsafe(`UPDATE ${prefix}users SET role = 'admin' WHERE username = 'admin'`).catch(() => {});
+
+    console.log("[ensureWhatsappSchema] OK (auth + admin ready)");
   } catch (err) {
     console.error("[ensureWhatsappSchema]", err.message);
     throw err;

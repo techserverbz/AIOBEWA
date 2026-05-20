@@ -2,6 +2,8 @@ import "dotenv/config";
 import express from "express";
 import { ensureWhatsappSchema } from "./db/ensureWhatsappSchema.js";
 import whatsappRoutes from "./routes/whatsappRoutes.js";
+import authRoutes from "./routes/authRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 import { whatsappManager } from "./lib/whatsappManager.js";
 
 const app = express();
@@ -35,6 +37,10 @@ app.get("/", (_req, res) => {
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "whatsapp-wwebjs", activeSessions: whatsappManager.clients.size });
 });
+
+// Auth (login/signup/otp) + admin panel
+app.use("/auth", authRoutes);
+app.use("/admin", adminRoutes);
 
 // WhatsApp routes (auth + org required)
 app.use("/sessions", whatsappRoutes);

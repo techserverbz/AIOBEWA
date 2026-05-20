@@ -10,11 +10,14 @@
     "postinstall": "node patches/patch-wwebjs-lid.js"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.36.0",
     "express": "^4.21.0",
     "jsonwebtoken": "^9.0.2",
+    "multer": "^2.1.1",
+    "nodemailer": "^8.0.7",
     "postgres": "^3.4.4",
     "qrcode": "^1.5.4",
     "uuidv7": "^1.2.1",
